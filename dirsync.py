@@ -575,6 +575,19 @@ def copy_single_file(
     file_size = src_stat.st_size
     mtime_ns = src_stat.st_mtime_ns
 
+    # Check destination hash before copying to avoid unnecessary re-copies
+    if os.path.exists(dst_path):
+        try:
+            src_hash = file_hash(src_path, offset=0)
+            dest_hash = verify_destination_hash(dst_path)
+            if src_hash == dest_hash:
+                logger.info("Destination hash matches source, skipping %s", rel_path)
+                if progress_callback:
+                    progress_callback(rel_path, file_size, file_size)
+                return "skipped", 0
+        except OSError:
+            pass
+
     state = get_file_state(state_db, rel_path)
 
     if state and state["status"] == "verified":
@@ -1057,9 +1070,21 @@ def main():
     logger.info("Found %d files, %s total", total_files, _human_size(total_bytes))
 
     if args.dry_run:
-        logger.info("Dry run - would copy:")
+        would_copy = []
         for rel_path, src_path, _, _, _ in files:
-            logger.info("  %s", rel_path)
+            dst_full = os.path.join(dest_root, rel_path)
+            if os.path.exists(dst_full):
+                try:
+                    src_hash = file_hash(src_path, offset=0)
+                    dest_hash = verify_destination_hash(dst_full)
+                    if src_hash == dest_hash:
+                        continue
+                except OSError:
+                    pass
+            would_copy.append(rel_path)
+        logger.info("Dry run - would copy %d files", len(would_copy))
+        for p in would_copy:
+            logger.info("  %s", p)
         return
 
     create_directories(source_root, dest_root, dirs, state_db)
