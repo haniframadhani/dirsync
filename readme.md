@@ -2,42 +2,79 @@
 
 Directory copy with resume, integrity verification, and progress tracking.
 
+## Overview
+
+`dirsync` copies a directory tree from a source to a destination with support for resuming interrupted copies, verifying file integrity with SHA‑256, and reporting progress. It uses a SQLite database to track copy state, enabling safe restarts after crashes or power loss.
+
+## Features
+
+- Resumable copy – Ctrl+C or crash does not lose progress.
+- SHA‑256 verification – source and destination hashes compared after each file.
+- SQLite state tracking – keeps file status, size, mtime, offset, attempts.
+- Parallel small‑file copying – configurable worker count.
+- Exclude/include patterns – glob patterns.
+- Preserve symlinks or copy targets.
+- Preserve special files (FIFOs, sockets, devices) – requires root.
+- Dry‑run mode – preview what would be copied.
+- Verify‑only mode – re‑verify destination files without copying.
+- Verbose and quiet logging.
+
+## Notes
+
+- **Platform**: Tested on Linux only. Other platforms **not sure work**. Test first with duplicate file before use to copy the actual may important file.
+
+- **Dependencies**: Requires root access for `--preserve-special` option to copy special files (FIFOs, sockets, devices).
+
+- **Filesystem**: Works across different filesystems but not on the same filesystem unless explicitly needed. Large copies across filesystems may have reduced performance.
+
+- **Permissions**: Ensure the destination directory has write permissions before starting a copy operation.
+
+## Installation
+
+```bash
+git clone https://github.com/haniframadhani/dirsync.git
+cd dirsync
+```
+
+Python 3.8+ required.
+
 ## Usage
 
-```
+```bash
 python3 dirsync.py <source> <destination> [options]
 ```
 
-## Options
+### Options
 
 | Flag | Description |
 |------|-------------|
-| `--dry-run` | Preview what would be copied without copying |
-| `--verify-only` | Re-verify destination files without copying |
+| `--dry-run` | Preview copy without writing files |
+| `--verify-only` | Re‑verify destination files only |
 | `--retries N` | Retry attempts per file (default: 3) |
 | `--jobs N` | Parallel workers for small files (default: 4) |
 | `--exclude PATTERN` | Exclude files matching pattern (repeatable) |
 | `--include PATTERN` | Only copy files matching pattern (repeatable) |
 | `--preserve-links` | Copy symlinks instead of their targets |
-| `--preserve-special` | Copy special files (FIFOs, sockets, devices) |
-| `--force` | Force copy even if source was modified during copy |
-| `--verbose, -v` | Verbose logging |
-| `--quiet, -q` | Suppress output |
+| `--preserve-special` | Copy special files (requires root) |
+| `--force` | Force copy even if source changed during copy |
+| `--verbose, -v` | Enable verbose logging |
+| `--quiet, -q` | Suppress progress output |
 
-## Examples
+### Examples
 
-```
+```bash
+# Basic copy
 python3 dirsync.py /mnt/media /mnt/backup
+
+# Dry run
 python3 dirsync.py /mnt/media /mnt/backup --dry-run
+
+# Increase retries and workers
 python3 dirsync.py /mnt/media /mnt/backup --retries 5 --jobs 8
+
+# Exclude temporary files
 python3 dirsync.py /mnt/media /mnt/backup --exclude "*.tmp" --exclude "*.log"
+
+# Verify only
 python3 dirsync.py /mnt/media /mnt/backup --verify-only
 ```
-
-## Features
-
-- Resumable copy (Ctrl+C / crash / power loss safe)
-- SHA-256 integrity verification
-- SQLite-based state tracking
-- Parallel small-file copying
-- Source mutation detection
