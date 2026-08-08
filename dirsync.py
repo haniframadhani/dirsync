@@ -438,7 +438,12 @@ def file_hash(path, offset=0):
 
 
 def stream_hash_and_copy(
-    src_path, dst_path, src_offset=0, dst_offset=0, state_db=None, rel_path=None
+    src_path,
+    dst_path,
+    src_offset=0,
+    dst_offset=0,
+    state_db=None,
+    rel_path=None,
 ):
     """Copy from src to dst while computing source hash in a single pass.
     For resumed files, reads source from byte 0 for hash but copies from src_offset.
@@ -531,7 +536,6 @@ def copy_single_file(
     force=False,
     include_patterns=None,
     exclude_patterns=None,
-    progress_callback=None,
 ):
     """Copy a single file with resume support and verification."""
 
@@ -560,8 +564,6 @@ def copy_single_file(
             os.utime(dst_path, (src_stat.st_mtime, src_stat.st_mtime))
         except OSError:
             pass
-        if progress_callback:
-            progress_callback(rel_path, src_stat.st_size, src_stat.st_size)
         return "verified", src_stat.st_size
 
     if stat.S_ISFIFO(src_stat.st_mode) or stat.S_ISSOCK(src_stat.st_mode):
@@ -581,9 +583,7 @@ def copy_single_file(
             src_hash = file_hash(src_path, offset=0)
             dest_hash = verify_destination_hash(dst_path)
             if src_hash == dest_hash:
-                logger.info("Destination hash matches source, skipping %s", rel_path)
-                if progress_callback:
-                    progress_callback(rel_path, file_size, file_size)
+                logger.debug("Destination hash matches source, skipping %s", rel_path)
                 return "skipped", 0
         except OSError:
             pass
@@ -593,17 +593,15 @@ def copy_single_file(
     if state and state["status"] == "verified":
         if os.path.exists(dst_path):
             if state["size"] == file_size and state["mtime_ns"] == mtime_ns:
-                if progress_callback:
-                    progress_callback(rel_path, file_size, file_size)
                 return "skipped", 0
             else:
-                logger.info(
+                logger.debug(
                     "Source changed for %s (size/mtime mismatch), re-copying", rel_path
                 )
                 mark_pending(state_db, rel_path)
                 state = None
         else:
-            logger.info(
+            logger.debug(
                 "Destination missing for verified file %s, re-copying", rel_path
             )
             upsert_file(
@@ -614,7 +612,7 @@ def copy_single_file(
     if state and state["status"] in ("in-progress", "pending"):
         if state["size"] is not None and state["mtime_ns"] is not None:
             if state["size"] != file_size or state["mtime_ns"] != mtime_ns:
-                logger.info("Source changed for %s during copy, restarting", rel_path)
+                logger.debug("Source changed for %s during copy, restarting", rel_path)
                 mark_pending(state_db, rel_path)
                 state = {
                     "status": "pending",
@@ -629,7 +627,7 @@ def copy_single_file(
         if state and state["status"] == "in-progress" and state["offset"] > 0:
             resume_offset = state["offset"]
             if not os.path.exists(dst_path):
-                logger.info(
+                logger.debug(
                     "Destination missing for in-progress file %s, restarting from scratch",
                     rel_path,
                 )
@@ -638,7 +636,7 @@ def copy_single_file(
                     state_db, rel_path, file_size, mtime_ns, "pending", dest_missing=1
                 )
             elif os.path.getsize(dst_path) != resume_offset:
-                logger.info(
+                logger.debug(
                     "Destination size mismatch for %s, restarting from scratch",
                     rel_path,
                 )
@@ -656,15 +654,13 @@ def copy_single_file(
         if _shutdown.is_set():
             return "skipped", 0
 
-        logger.info(
+        logger.debug(
             "Copying %s (attempt %d/%d, offset=%d)",
             rel_path,
             attempt + 1,
             retries,
             resume_offset,
         )
-        if progress_callback:
-            progress_callback(rel_path, 0, file_size)
 
         try:
             src_hash, bytes_copied = stream_hash_and_copy(
@@ -677,8 +673,6 @@ def copy_single_file(
             )
         except (OSError, IOError) as e:
             logger.error("Copy error for %s: %s", rel_path, e)
-            if progress_callback:
-                progress_callback(rel_path, 0, file_size)
             mark_pending(state_db, rel_path)
             time.sleep(0.5 * (attempt + 1))
             continue
@@ -735,9 +729,6 @@ def copy_single_file(
             pass
 
         mark_verified(state_db, rel_path)
-
-        if progress_callback:
-            progress_callback(rel_path, file_size, file_size)
 
         return "verified", file_size
 
@@ -850,23 +841,17 @@ class ProgressReporter:
         self.copied_bytes = 0
         self.skipped_files = 0
         self.failed_files = 0
-        self.current_file = ""
-        self.current_bytes = 0
-        self.current_total = 0
         self.start_time = time.time()
-        self.last_update = 0
         self.is_tty = sys.stdout.isatty()
-        self.speed_samples = []
         self.lock = threading.Lock()
+        self._processed = 0
 
     def update(self, rel_path, current_bytes, total_bytes):
-        with self.lock:
-            self.current_file = rel_path
-            self.current_bytes = current_bytes
-            self.current_total = total_bytes
+        pass
 
     def file_done(self, rel_path, status, bytes_copied):
         with self.lock:
+            self._processed += 1
             if status == "verified":
                 self.copied_files += 1
                 self.copied_bytes += bytes_copied
@@ -875,61 +860,26 @@ class ProgressReporter:
                 self.copied_bytes += bytes_copied
             elif status == "failed":
                 self.failed_files += 1
-            self._report()
-
-    def _report(self):
-        now = time.time()
-        if now - self.last_update < 0.3 and self.current_bytes < self.current_total:
-            return
-        self.last_update = now
-
-        elapsed = now - self.start_time
-        speed = self.copied_bytes / elapsed if elapsed > 0 else 0
-
-        remaining_bytes = self.total_bytes - self.copied_bytes
-        eta = remaining_bytes / speed if speed > 0 else 0
-
-        pct = (
-            (self.copied_bytes / self.total_bytes * 100)
-            if self.total_bytes > 0
-            else 100
-        )
-
-        if self.current_total > 0:
-            file_pct = self.current_bytes / self.current_total * 100
-        else:
-            file_pct = 100
-
-        processed = self.copied_files + self.skipped_files + self.failed_files
-        remaining = self.total_files - processed
-
-        line = (
-            f"\r[{pct:5.1f}%] {self.copied_files}/{self.total_files} files | "
-            f"{_human_size(self.copied_bytes)}/{_human_size(self.total_bytes)} | "
-            f"Speed: {_human_size(speed)}/s | ETA: {_format_time(eta)} | "
-            f"File: {file_pct:.0f}% {os.path.basename(self.current_file)[:40]}"
-        )
-
-        if self.is_tty:
-            sys.stdout.write(line + "  ")
-            sys.stdout.flush()
-        elif elapsed - getattr(self, "_last_log", 0) > 5:
-            self._last_log = elapsed
-            logger.info(
-                "Progress: %.1f%% | %d/%d files | %s/%s | Speed: %s/s | ETA: %s",
-                pct,
-                processed,
-                self.total_files,
-                _human_size(self.copied_bytes),
-                _human_size(self.total_bytes),
-                _human_size(speed),
-                _format_time(eta),
+            remaining = self.total_files - self._processed
+            name = os.path.basename(rel_path) if rel_path else "unknown"
+            tag = (
+                "done"
+                if status == "verified"
+                else ("skip" if status == "skipped" else "FAIL")
             )
+            logger.info("%-6s  %-50s  (%d remaining)", tag, name, remaining)
 
     def summary_line(self):
-        if self.is_tty:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
+        elapsed = time.time() - self.start_time
+        speed = self.copied_bytes / elapsed if elapsed > 0 else 0
+        logger.info(
+            "done=%d  skip=%d  fail=%d  %s  %s",
+            self.copied_files,
+            self.skipped_files,
+            self.failed_files,
+            _human_size(self.copied_bytes),
+            _format_time(elapsed),
+        )
 
 
 def _human_size(n):
@@ -1104,9 +1054,6 @@ def main():
     results = {"verified": 0, "skipped": 0, "failed": 0}
     total_copied_bytes = 0
 
-    def progress_cb(rel_path, current, total):
-        reporter.update(rel_path, current, total)
-
     def file_done_cb(rel_path, status, bytes_copied):
         reporter.file_done(rel_path, status, bytes_copied)
         with _shutdown_lock:
@@ -1144,7 +1091,6 @@ def main():
             force=args.force,
             include_patterns=args.include,
             exclude_patterns=args.exclude,
-            progress_callback=progress_cb,
         )
         total_copied_bytes += bytes_copied
         file_done_cb(rel_path, status, bytes_copied)
@@ -1165,7 +1111,6 @@ def main():
                 force=args.force,
                 include_patterns=args.include,
                 exclude_patterns=args.exclude,
-                progress_callback=progress_cb,
             )
             return rel_path, status, bytes_copied
 
