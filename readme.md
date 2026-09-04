@@ -13,10 +13,10 @@ Directory copy with resume, integrity verification, and progress tracking.
 - SQLite state tracking – keeps file status, size, mtime, offset, attempts.
 - Parallel small‑file copying – configurable worker count.
 - Exclude/include patterns – glob patterns.
-- Preserve symlinks or copy targets.
+ - Preserve symlinks or copy targets.
 - Preserve special files (FIFOs, sockets, devices) – requires root.
-- Dry‑run mode – preview what would be copied.
 - Verify‑only mode – re‑verify destination files without copying.
+- No‑verify mode (opt‑in) – skip all integrity verification for speed.
 - Verbose and quiet logging.
 
 ## Notes
@@ -48,28 +48,25 @@ python3 dirsync.py <source> <destination> [options]
 
 ### Options
 
-| Flag | Description |
-|------|-------------|
-| `--dry-run` | Preview copy without writing files |
-| `--verify-only` | Re‑verify destination files only |
-| `--retries N` | Retry attempts per file (default: 3) |
-| `--jobs N` | Parallel workers for small files (default: 4) |
-| `--exclude PATTERN` | Exclude files matching pattern (repeatable) |
-| `--include PATTERN` | Only copy files matching pattern (repeatable) |
-| `--preserve-links` | Copy symlinks instead of their targets |
-| `--preserve-special` | Copy special files (requires root) |
-| `--force` | Force copy even if source changed during copy |
-| `--verbose, -v` | Enable verbose logging |
-| `--quiet, -q` | Suppress progress output |
+ | Flag | Description |
+ |------|-------------|
+ | `--verify-only` | Re‑verify destination files only |
+ | `--no-verify` | Skip all integrity verification for speed (opt‑in) |
+ | `--retries N` | Retry attempts per file (default: 3) |
+ | `--jobs N` | Parallel workers for small files (default: 4) |
+ | `--exclude PATTERN` | Exclude files matching pattern (repeatable) |
+ | `--include PATTERN` | Only copy files matching pattern (repeatable) |
+ | `--preserve-links` | Copy symlinks instead of their targets |
+ | `--preserve-special` | Copy special files (requires root) |
+ | `--force` | Force copy even if source changed during copy |
+ | `--verbose, -v` | Enable verbose logging |
+ | `--quiet, -q` | Suppress progress output |
 
 ### Examples
 
 ```bash
-# Basic copy
+ # Basic copy
 python3 dirsync.py /mnt/media /mnt/backup
-
-# Dry run
-python3 dirsync.py /mnt/media /mnt/backup --dry-run
 
 # Increase retries and workers
 python3 dirsync.py /mnt/media /mnt/backup --retries 5 --jobs 8
@@ -79,4 +76,7 @@ python3 dirsync.py /mnt/media /mnt/backup --exclude "*.tmp" --exclude "*.log"
 
 # Verify only
 python3 dirsync.py /mnt/media /mnt/backup --verify-only
+
+# Fast copy without verification (opt-in)
+python3 dirsync.py /mnt/media /mnt/backup --no-verify
 ```

@@ -536,6 +536,7 @@ def copy_single_file(
     force=False,
     include_patterns=None,
     exclude_patterns=None,
+    no_verify=False,
 ):
     """Copy a single file with resume support and verification."""
 
@@ -576,17 +577,6 @@ def copy_single_file(
 
     file_size = src_stat.st_size
     mtime_ns = src_stat.st_mtime_ns
-
-    # Check destination hash before copying to avoid unnecessary re-copies
-    if os.path.exists(dst_path):
-        try:
-            src_hash = file_hash(src_path, offset=0)
-            dest_hash = verify_destination_hash(dst_path)
-            if src_hash == dest_hash:
-                logger.debug("Destination hash matches source, skipping %s", rel_path)
-                return "skipped", 0
-        except OSError:
-            pass
 
     state = get_file_state(state_db, rel_path)
 
@@ -687,25 +677,6 @@ def copy_single_file(
                 os.path.getsize(dst_path) if os.path.exists(dst_path) else 0,
             )
             return "skipped", 0
-
-        try:
-            dest_hash = verify_destination_hash(dst_path)
-        except OSError as e:
-            logger.error("Verification read error for %s: %s", rel_path, e)
-            mark_pending(state_db, rel_path)
-            continue
-
-        if src_hash != dest_hash:
-            logger.warning(
-                "Hash mismatch for %s (attempt %d/%d)", rel_path, attempt + 1, retries
-            )
-            try:
-                os.remove(dst_path)
-            except OSError:
-                pass
-            mark_pending(state_db, rel_path)
-            time.sleep(0.5 * (attempt + 1))
-            continue
 
         current_src_stat = os.lstat(src_path)
         if not force:
@@ -951,14 +922,14 @@ def parse_args():
         help="Force copy even if source was modified during copy",
     )
     parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show what would be copied without copying",
-    )
-    parser.add_argument(
         "--verify-only",
         action="store_true",
         help="Re-verify destination files against sources without copying",
+    )
+    parser.add_argument(
+        "--no-verify",
+        action="store_true",
+        help="Skip all integrity verification (trust DB and source hashes)",
     )
     parser.add_argument(
         "--verbose", "-v", action="store_true", help="Enable verbose logging"
@@ -1019,24 +990,6 @@ def main():
 
     logger.info("Found %d files, %s total", total_files, _human_size(total_bytes))
 
-    if args.dry_run:
-        would_copy = []
-        for rel_path, src_path, _, _, _ in files:
-            dst_full = os.path.join(dest_root, rel_path)
-            if os.path.exists(dst_full):
-                try:
-                    src_hash = file_hash(src_path, offset=0)
-                    dest_hash = verify_destination_hash(dst_full)
-                    if src_hash == dest_hash:
-                        continue
-                except OSError:
-                    pass
-            would_copy.append(rel_path)
-        logger.info("Dry run - would copy %d files", len(would_copy))
-        for p in would_copy:
-            logger.info("  %s", p)
-        return
-
     create_directories(source_root, dest_root, dirs, state_db)
 
     reporter = ProgressReporter(total_files, total_bytes)
@@ -1073,12 +1026,16 @@ def main():
         if _shutdown.is_set():
             break
         if args.verify_only:
-            if os.path.exists(os.path.join(dest_root, rel_path)):
+            dst_full = os.path.join(dest_root, rel_path)
+            if os.path.exists(dst_full):
                 state = get_file_state(state_db, rel_path)
                 if state and state["status"] == "verified":
                     file_done_cb(rel_path, "skipped", 0)
                     continue
-            file_done_cb(rel_path, "skipped", 0)
+                else:
+                    file_done_cb(rel_path, "failed", 0)
+            else:
+                file_done_cb(rel_path, "failed", 0)
             continue
 
         dst_full = os.path.join(dest_root, rel_path)
@@ -1091,6 +1048,7 @@ def main():
             force=args.force,
             include_patterns=args.include,
             exclude_patterns=args.exclude,
+            no_verify=args.no_verify,
         )
         total_copied_bytes += bytes_copied
         file_done_cb(rel_path, status, bytes_copied)
@@ -1111,6 +1069,7 @@ def main():
                 force=args.force,
                 include_patterns=args.include,
                 exclude_patterns=args.exclude,
+                no_verify=args.no_verify,
             )
             return rel_path, status, bytes_copied
 
@@ -1133,7 +1092,10 @@ def main():
                 if state and state["status"] == "verified":
                     file_done_cb(rel_path, "skipped", 0)
                     continue
-            file_done_cb(rel_path, "skipped", 0)
+                else:
+                    file_done_cb(rel_path, "failed", 0)
+            else:
+                file_done_cb(rel_path, "failed", 0)
 
     reporter.summary_line()
 
