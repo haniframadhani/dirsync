@@ -221,3 +221,5 @@ __marimo__/
 
 destination/*
 source/*
+
+.venv

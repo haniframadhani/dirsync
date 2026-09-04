@@ -38,7 +38,17 @@ git clone https://github.com/haniframadhani/dirsync.git
 cd dirsync
 ```
 
-Python 3.8+ required.
+Python 3.10+ required.
+
+## Testing
+
+```bash
+pip install pytest pytest-cov
+pytest tests/ -v
+pytest tests/ --cov=dirsync --cov-report=term-missing
+```
+
+141 tests covering state management, hash verification, file filtering, copy operations, and end-to-end workflows.
 
 ## Usage
 
